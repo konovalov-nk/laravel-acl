@@ -63,6 +63,82 @@ trait HasPermission
         return $permissions;
     }
 
+
+    /**
+     * Get all user permissions including
+     * user all role permissions.
+     *
+     * @return array|null
+     */
+    public function getPermissionsModel()
+    {
+        // user permissions overridden from role.
+        $permissions = \Cache::remember(
+            'acl.getPermissionsById_'.$this->id,
+            config('acl.cacheMinutes'),
+            function () {
+                return $this->getPermissionsInheritedModel();
+            }
+        );
+
+        // permissions based on role.
+        // more permissive permission wins
+        // if user has multiple roles we keep
+        // true values.
+        foreach ($this->roles()->get() as $role) {
+            $model_string = $role->pivot->model;
+            $reference_id = $role->pivot->reference_id;
+            $model_reference_key = '';
+            if ( ! empty($model_string) && !empty($reference_id)) {
+                $model_reference_key = "{$model_string}:{$reference_id}";
+            }
+
+            foreach ($role->getPermissionsModel() as $slug => $array) {
+                $permission_key = empty($model_reference_key) ? $slug : "{$slug}:{$model_reference_key}";
+                if ( array_key_exists($permission_key, $permissions) ) {
+                    foreach ($array as $clearance => $value) {
+                        if( !array_key_exists( $clearance, $permissions[$permission_key] ) ) {
+                            ! $value ?: $permissions[$permission_key][$clearance] = true;
+                        }
+                    }
+                } else {
+                    $permissions = array_merge($permissions, [$permission_key => $array]);
+                }
+            }
+        }
+
+        return $permissions;
+    }
+
+
+    /**
+     * @param        $permission
+     * @param string $model_string
+     * @param int    $reference_id
+     * @param string $operator
+     *
+     * @return mixed
+     */
+    public function able($permission, $model_string = '', $reference_id = 0, $operator = null)
+    {
+        // user permissions including
+        // all of user role permissions
+        $merge =  \Cache::remember(
+            'acl.getMergeById_'.$this->id,
+            config('acl.cacheMinutes'),
+            function () {
+                return $this->getPermissionsModel();
+            }
+        );
+
+        // lets call our base can() method
+        // from role class. $merge already
+        // has user & role permissions
+        $model = config('acl.role', 'Kodeine\Acl\Models\Eloquent\Role');
+
+        return (new $model)->able($permission, $model_string, $reference_id, $operator, $merge);
+    }
+
     /**
      * Check if User has the given permission.
      *

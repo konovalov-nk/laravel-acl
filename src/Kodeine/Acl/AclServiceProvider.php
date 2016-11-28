@@ -83,6 +83,15 @@ class AclServiceProvider extends ServiceProvider
         Blade::directive('endpermission', function () {
             return "<?php endif; ?>";
         });
+
+        // Able
+        Blade::directive('able', function ($expression) {
+            return "<?php if (Auth::check() && Auth::user()->able({$expression})): ?>";
+        });
+
+        Blade::directive('endable', function () {
+            return "<?php endif; ?>";
+        });
     }
         /**
      * Register Blade Template Extensions for >= L5.1
@@ -104,6 +113,15 @@ class AclServiceProvider extends ServiceProvider
         });
 
         Blade::directive('endpermission', function () {
+            return "<?php endif; ?>";
+        });
+
+        // Able
+        Blade::directive('able', function ($expression) {
+            return "<?php if (Auth::check() && Auth::user()->able({$expression})): ?>";
+        });
+
+        Blade::directive('endable', function () {
             return "<?php endif; ?>";
         });
     }
@@ -131,6 +149,16 @@ class AclServiceProvider extends ServiceProvider
 
         $blade->extend(function ($view, $compiler) {
             $pattern = $compiler->createPlainMatcher('endpermission');
+            return preg_replace($pattern, '<?php endif; ?>', $view);
+        });
+
+        $blade->extend(function ($view, $compiler) {
+            $pattern = $compiler->createMatcher('able');
+            return preg_replace($pattern, '<?php if (Auth::check() && Auth::user()->able$2): ?> ', $view);
+        });
+
+        $blade->extend(function ($view, $compiler) {
+            $pattern = $compiler->createPlainMatcher('endable');
             return preg_replace($pattern, '<?php endif; ?>', $view);
         });
     }

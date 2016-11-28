@@ -48,6 +48,69 @@ class Role extends Model
     }
 
     /**
+     * List all permissions
+     *
+     * @return mixed
+     */
+    public function getPermissionsModel()
+    {
+        return \Cache::remember(
+            'acl.getPermissionsInheritedById_'.$this->id,
+            config('acl.cacheMinutes'),
+            function () {
+                return $this->getPermissionsInheritedModel();
+            }
+        );
+    }
+
+
+    /**
+     * Checks if the role has the given permission.
+     *
+     * @param string $permission
+     * @param string $model
+     * @param int    $reference_id
+     * @param string $operator
+     * @param array  $mergePermissions
+     *
+     * @return bool
+     */
+    public function able($permission, $model = '', $reference_id =0, $operator = null, $mergePermissions = [])
+    {
+        $operator = is_null($operator) ? $this->parseOperator($permission) : $operator;
+
+        $permission = $this->hasDelimiterToArray($permission);
+        $permissions = $this->getPermissionsModel() + $mergePermissions;
+
+
+        // make permissions to dot notation.
+        // create.user, delete.admin etc.
+        $permissions = $this->toDotPermissions($permissions);
+
+        // validate permissions array
+        if ( is_array($permission) ) {
+
+            if ( ! in_array($operator, ['and', 'or']) ) {
+                $e = 'Invalid operator, available operators are "and", "or".';
+                throw new \InvalidArgumentException($e);
+            }
+
+            $call = 'canWith' . ucwords($operator);
+
+            return $this->$call($permission, $permissions);
+        }
+
+        // Validate single permission.
+        $permission_key = "{$permission}:{$model}:{$reference_id}";
+        // User have all permissions on this.
+        if (isset($permissions[$permission]) && $permissions[$permission] == true) {
+            return true;
+        }
+        return isset($permissions[$permission_key]) && $permissions[$permission_key] == true;
+    }
+
+
+    /**
      * Checks if the role has the given permission.
      *
      * @param string $permission

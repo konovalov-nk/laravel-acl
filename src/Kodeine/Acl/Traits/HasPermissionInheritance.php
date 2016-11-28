@@ -66,6 +66,60 @@ trait HasPermissionInheritance
         return $rights;
     }
 
+    public function getPermissionsInheritedModel()
+    {
+        $rights = [];
+        $permissions = $this->permissions()->get();
+
+        // ntfs permissions
+        // determine if ntfs is enabled
+        // then more permissive wins
+        $tmp = [];
+        $letNtfs = function ($alias, $slug) use (&$tmp) {
+            if ( config('acl.most_permissive_wins', false) ) {
+                $ntfs[$alias] = array_diff($slug, [false]);
+                if ( sizeof($ntfs) > 0 ) {
+                    $tmp = array_replace_recursive($tmp, $ntfs);
+                }
+            }
+        };
+
+        foreach ($permissions as $row) {
+
+            // permissions without inherit ids
+            if ( is_null($row->inherit_id) || ! $row->inherit_id ) {
+
+                // ntfs determination
+                $letNtfs($row->name, $row->slug);
+
+                // merge permissions
+                $rights = array_replace_recursive($rights, [$row->name => $row->slug], $tmp);
+                continue;
+            }
+
+            // process inherit_id recursively
+            $inherited = $this->getRecursiveInherit($row->inherit_id, $row->slug);
+            $merge = $permissions->where('name', $row->name);
+            $merge = method_exists($merge, 'pluck') ? $merge->pluck('slug', 'name') : $merge->lists('slug', 'name');
+
+                // fix for l5.1 and backward compatibility.
+            // lists() method should return as an array.
+            $merge = $this->collectionAsArray($merge);
+
+            // replace and merge permissions
+            $rights = array_replace_recursive($rights, $inherited, $merge);
+
+            // make sure we don't unset if
+            // inherited & slave permission
+            // have same names
+            if ( key($inherited) != $row->name )
+                unset($rights[$row->name]);
+
+        }
+
+        return $rights;
+    }
+
     /**
      * @param $inherit_id
      * @param $permissions

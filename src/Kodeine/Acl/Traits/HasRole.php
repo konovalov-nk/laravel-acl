@@ -21,7 +21,7 @@ trait HasRoleImplementation
     {
         $model = config('acl.role', 'Kodeine\Acl\Models\Eloquent\Role');
 
-        return $this->belongsToMany($model)->withTimestamps();
+        return $this->belongsToMany($model)->withPivot(['model', 'reference_id'])->withTimestamps();
     }
 
     /**
@@ -68,6 +68,8 @@ trait HasRoleImplementation
      * Checks if the user has the given role.
      *
      * @param  string $slug
+     * @param  string $operator
+     *
      * @return bool
      */
     public function hasRole($slug, $operator = null)
@@ -95,20 +97,75 @@ trait HasRoleImplementation
         return in_array($slug, $roles);
     }
 
+
+    /**
+     * Checks if the user has the given role.
+     *
+     * @param  string $slug
+     * @param string  $model
+     * @param int     $reference_id
+     * @param string  $operator
+     *
+     * @return bool
+     */
+    public function hasRoleOnModel($slug, $model = '', $reference_id = 0, $operator = null)
+    {
+        $operator = is_null($operator) ? $this->parseOperator($slug) : $operator;
+
+        $roles = $this->roles()
+            ->where('model', $model)
+            ->where('reference_id', $reference_id)
+            ->get();
+        $roles = $roles instanceof \Illuminate\Contracts\Support\Arrayable ? $roles->toArray() : (array) $roles;
+        $slug = $this->hasDelimiterToArray($slug);
+
+        // array of slugs
+        if ( is_array($slug) ) {
+
+            if ( ! in_array($operator, ['and', 'or']) ) {
+                $e = 'Invalid operator, available operators are "and", "or".';
+                throw new \InvalidArgumentException($e);
+            }
+
+            $call = 'isWith' . ucwords($operator);
+
+            return $this->$call($slug, $roles);
+        }
+
+        // single slug
+        $roles_exist = array_map(function ($role) use ($slug, $model, $reference_id) {
+            $role_exist = false;
+            if ($slug == $role['slug']) {
+                $pivot = $role['pivot'];
+                $role_exist = ($pivot['model'] == $model) && ($pivot['reference_id'] == $reference_id);
+            }
+            return (int) $role_exist;
+        }, $roles);
+
+        // Return true if there are at least one role assignment matching.
+        return (bool)array_sum($roles_exist);
+    }
+
     /**
      * Assigns the given role to the user.
      *
-     * @param  collection|object|array|string|int $role
+     * @param collection|object|array|string|int $role
+     * @param string                              $model
+     * @param int                                 $reference_id
+     *
      * @return bool
      */
-    public function assignRole($role)
+    public function assignRole($role, $model = '', $reference_id = 0)
     {
-        return $this->mapArray($role, function ($role) {
+        return $this->mapArray($role, function ($role) use ($model, $reference_id) {
 
             $roleId = $this->parseRoleId($role);
 
             if ( ! $this->roles->keyBy('id')->has($roleId) ) {
-                $this->roles()->attach($roleId);
+                $this->roles()->attach($roleId, [
+                    'model' => $model,
+                    'reference_id' => $reference_id
+                ]);
 
                 return $role;
             }
@@ -121,15 +178,24 @@ trait HasRoleImplementation
      * Revokes the given role from the user.
      *
      * @param  collection|object|array|string|int $role
+     * @param string                              $model
+     * @param int                                 $reference_id
+     *
      * @return bool
      */
-    public function revokeRole($role)
+    public function revokeRole($role, $model = '', $reference_id = 0)
     {
-        return $this->mapArray($role, function ($role) {
+        return $this->mapArray($role, function ($role) use ($model, $reference_id) {
 
             $roleId = $this->parseRoleId($role);
 
-            return $this->roles()->detach($roleId);
+            return $this->roles()->newPivotStatementForId($roleId)
+            // Laravel couldn't detach pivot records with provided constraints, but this should work:
+                ->where('model', $model)
+                ->where('reference_id', $reference_id)
+                ->delete();
+            // Update when Laravel would support this.
+            //->detach($roleId);
         });
     }
 
@@ -148,6 +214,28 @@ trait HasRoleImplementation
 
             return $sync;
         });
+
+        return $this->roles()->sync($sync);
+    }
+
+
+    /**
+     * Syncs the given role(s) with the user.
+     *
+     * @param        $role
+     * @param string $model
+     * @param int    $reference_id
+     *
+     * @return bool
+     */
+    public function syncRole($role, $model = '', $reference_id = 0)
+    {
+        $sync = [
+            $this->parseRoleId($role) => [
+                'model' => $model,
+                'reference_id' => $reference_id,
+            ]
+        ];
 
         return $this->roles()->sync($sync);
     }
