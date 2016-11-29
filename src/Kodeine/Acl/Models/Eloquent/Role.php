@@ -95,9 +95,9 @@ class Role extends Model
                 throw new \InvalidArgumentException($e);
             }
 
-            $call = 'canWith' . ucwords($operator);
+            $call = 'ableWith' . ucwords($operator);
 
-            return $this->$call($permission, $permissions);
+            return $this->$call($permission, $permissions, $model, $reference_id);
         }
 
         // Validate single permission.
@@ -109,6 +109,57 @@ class Role extends Model
         return isset($permissions[$permission_key]) && $permissions[$permission_key] == true;
     }
 
+
+    /**
+     * @param        $permission
+     * @param        $permissions
+     * @param string $model
+     * @param int    $reference_id
+     *
+     * @return bool
+     */
+    protected function ableWithAnd($permission, $permissions, $model = '', $reference_id = 0)
+    {
+        foreach ($permission as $check) {
+            $permission_ok = false;
+            $permission_key = "{$check}:{$model}:{$reference_id}";
+            if (isset($permissions[$check]) && $permissions[$check] == true) {
+                $permission_ok = true;
+            }
+            if (isset($permissions[$permission_key]) && $permissions[$permission_key] == true) {
+                $permission_ok = true;
+            }
+            if ( ! $permission_ok) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
+    /**
+     * @param        $permission
+     * @param        $permissions
+     * @param string $model
+     * @param int    $reference_id
+     *
+     * @return bool
+     */
+    protected function ableWithOr($permission, $permissions, $model = '', $reference_id = 0)
+    {
+        foreach ($permission as $check) {
+            $permission_key = "{$check}:{$model}:{$reference_id}";
+            if (isset($permissions[$check]) && $permissions[$check] == true) {
+                return true;
+            }
+            if (isset($permissions[$permission_key]) && $permissions[$permission_key] == true) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /**
      * Checks if the role has the given permission.
