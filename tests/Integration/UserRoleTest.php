@@ -90,11 +90,11 @@ class UserTest extends IntegrationTest
         $this->assertEquals($user->getPermissions(), ['post' => $permissionAttributes['slug']]);
 
         // Permissions given to certain model and id.
-        $this->assertTrue($user->able('create.view', $example_model, $example_model_id));
+        $this->assertTrue($user->able('create.post', $example_model, $example_model_id));
         // User doesn't have permissions on all models and ids.
-        $this->assertFalse($user->able('create.view'));
+        $this->assertFalse($user->able('create.post'));
         // User role must have exact model id.
-        $this->assertFalse($user->able('create.view'), $example_model, 43);
+        $this->assertFalse($user->able('create.post'), $example_model, 43);
 
     }
 
