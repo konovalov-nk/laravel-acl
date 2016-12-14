@@ -4,6 +4,7 @@ use Kodeine\Acl\Tests\TestCase;
 
 abstract class IntegrationTest extends TestCase
 {
+
     /* ------------------------------------------------------------------------------------------------
      |  Main Functions
      | ------------------------------------------------------------------------------------------------
@@ -14,6 +15,7 @@ abstract class IntegrationTest extends TestCase
 
         $this->migrate();
     }
+
 
     public function tearDown()
     {

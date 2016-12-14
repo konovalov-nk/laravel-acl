@@ -1,6 +1,13 @@
 <?php namespace Kodeine\Acl\Traits;
 
+use Kodeine\Acl\Models\Eloquent\Role;
 
+/**
+ * Class HasRoleImplementation
+ * @package Kodeine\Acl\Traits
+ *
+ * @method static Builder|Collection|\Eloquent role($role, $column = null)
+ */
 trait HasRoleImplementation
 {
     use HasPermission;
@@ -32,17 +39,14 @@ trait HasRoleImplementation
     public function getRoles()
     {
         $this_roles = \Cache::remember(
-            'acl.getRolesById_'.$this->id,
+            "acl.getRolesById_{$this->id}",
             config('acl.cacheMinutes'),
             function () {
                 return $this->roles()->get();
             }
         );
 
-        $slugs = method_exists($this_roles, 'pluck') ? $this_roles->pluck('slug','id') : $this_roles->lists('slug','id');
-        return is_null($this_roles)
-            ? []
-            : $this->collectionAsArray($slugs);
+        return $this->getRolesMap($this_roles);
     }
 
     /**
@@ -50,29 +54,40 @@ trait HasRoleImplementation
      * role. Role can be an id or slug.
      *
      * @param \Illuminate\Database\Eloquent\Builder $query
-     * @param int|string                            $role
+     * @param int|string $role
+     * @param string $column
      * @return \Illuminate\Database\Eloquent\Builder
      */
-    public function scopeRole($query, $role)
+    public function scopeRole($query, $role, $column = null)
     {
         if (is_null($role)) {
             return $query;
         }
-        
-        return $query->whereHas('roles', function ($query) use ($role) {
-            $query->where(is_numeric($role) ? 'id' : 'slug', $role);
+
+        return $query->whereHas('roles', function ($query) use ($role, $column) {
+            if (is_array($role)) {
+                $queryColumn = !is_null($column) ? $column : 'roles.slug';
+
+                $query->whereIn($queryColumn, $role);
+            } else {
+                $queryColumn = !is_null($column) ? $column : (is_numeric($role) ? 'roles.id' : 'roles.slug');
+
+                $query->where($queryColumn, $role);
+            }
         });
     }
 
     /**
      * Checks if the user has the given role.
      *
-     * @param  string $slug
-     * @param  string $operator
+     * @param string  $slug
+     * @param string  $model
+     * @param int     $reference_id
+     * @param string  $operator
      *
      * @return bool
      */
-    public function hasRole($slug, $operator = null)
+    public function hasRole($slug, $model = '', $reference_id = 0, $operator = null)
     {
         $operator = is_null($operator) ? $this->parseOperator($slug) : $operator;
 
@@ -90,59 +105,50 @@ trait HasRoleImplementation
 
             $call = 'isWith' . ucwords($operator);
 
-            return $this->$call($slug, $roles);
+            return $this->$call($slug, $roles, $model, $reference_id);
         }
 
         // single slug
-        return in_array($slug, $roles);
+        return $this->checkRole($slug, $roles, $model, $reference_id);
     }
 
 
     /**
-     * Checks if the user has the given role.
-     *
-     * @param  string $slug
-     * @param string  $model
-     * @param int     $reference_id
-     * @param string  $operator
+     * @param        $role_slug
+     * @param        $roles
+     * @param string $model
+     * @param int    $reference_id
      *
      * @return bool
      */
-    public function hasRoleOnModel($slug, $model = '', $reference_id = 0, $operator = null)
+    private function checkRole($role_slug, $roles, $model = '', $reference_id = 0)
     {
-        $operator = is_null($operator) ? $this->parseOperator($slug) : $operator;
-
-        $roles = $this->roles()
-            ->where('model', $model)
-            ->where('reference_id', $reference_id)
-            ->get();
-        $roles = $roles instanceof \Illuminate\Contracts\Support\Arrayable ? $roles->toArray() : (array) $roles;
-        $slug = $this->hasDelimiterToArray($slug);
-
-        // array of slugs
-        if ( is_array($slug) ) {
-
-            if ( ! in_array($operator, ['and', 'or']) ) {
-                $e = 'Invalid operator, available operators are "and", "or".';
-                throw new \InvalidArgumentException($e);
-            }
-
-            $call = 'isWith' . ucwords($operator);
-
-            return $this->$call($slug, $roles);
+        if ($role_slug instanceof Role) {
+            $role_slug = $role_slug->slug;
         }
 
-        // single slug
-        $roles_exist = array_map(function ($role) use ($slug, $model, $reference_id) {
-            $role_exist = false;
-            if ($slug == $role['slug']) {
-                $pivot = $role['pivot'];
-                $role_exist = ($pivot['model'] == $model) && ($pivot['reference_id'] == $reference_id);
+        $roles_exist = array_map(function ($role_slugs) use ($role_slug, $model, $reference_id) {
+            $role_exist     = false;
+            $role_model     = "{$role_slug}:{$model}";
+            $role_reference = "{$role_slug}:{$model}:{$reference_id}";
+            $checks           = [
+                // If user have global role.
+                $role_slug,
+                // If user have role to this model.
+                $role_model,
+                // If user have role to this model and reference_id.
+                $role_reference
+            ];
+
+            foreach ($checks as $c) {
+                if (in_array($c, $role_slugs)) {
+                    $role_exist = true;
+                }
             }
-            return (int) $role_exist;
+
+            return (int)$role_exist;
         }, $roles);
 
-        // Return true if there are at least one role assignment matching.
         return (bool)array_sum($roles_exist);
     }
 
@@ -150,22 +156,26 @@ trait HasRoleImplementation
      * Assigns the given role to the user.
      *
      * @param collection|object|array|string|int $role
-     * @param string                              $model
-     * @param int                                 $reference_id
+     * @param string                             $model
+     * @param int                                $reference_id
      *
-     * @return bool
+     * @return bool|array
      */
     public function assignRole($role, $model = '', $reference_id = 0)
     {
-        return $this->mapArray($role, function ($role) use ($model, $reference_id) {
+        $id = $this->id;
+        return $this->mapArray($role, function ($role) use ($model, $reference_id, $id) {
 
             $roleId = $this->parseRoleId($role);
 
             if ( ! $this->roles->keyBy('id')->has($roleId) ) {
                 $this->roles()->attach($roleId, [
-                    'model' => $model,
+                    'model'        => $model,
                     'reference_id' => $reference_id
                 ]);
+
+                // Reset caches.
+                \Cache::forget("acl.getRolesById_{$id}");
 
                 return $role;
             }
@@ -177,25 +187,31 @@ trait HasRoleImplementation
     /**
      * Revokes the given role from the user.
      *
-     * @param  collection|object|array|string|int $role
-     * @param string                              $model
-     * @param int                                 $reference_id
+     * @param collection|object|array|string|int $role
+     * @param string                             $model
+     * @param int                                $reference_id
      *
-     * @return bool
+     * @return bool|array
      */
     public function revokeRole($role, $model = '', $reference_id = 0)
     {
-        return $this->mapArray($role, function ($role) use ($model, $reference_id) {
+        $id = $this->id;
+        return $this->mapArray($role, function ($role) use ($model, $reference_id, $id) {
 
             $roleId = $this->parseRoleId($role);
 
-            return $this->roles()->newPivotStatementForId($roleId)
+            $result = $this->roles()->newPivotStatementForId($roleId)
             // Laravel couldn't detach pivot records with provided constraints, but this should work:
                 ->where('model', $model)
                 ->where('reference_id', $reference_id)
                 ->delete();
             // Update when Laravel would support this.
-            //->detach($roleId);
+            //->detach($roleId, ['model' => $model, 'reference_id' => $reference_id]);
+
+            // Reset caches.
+            \Cache::forget("acl.getRolesById_{$id}");
+            return $result;
+
         });
     }
 
@@ -218,28 +234,6 @@ trait HasRoleImplementation
         return $this->roles()->sync($sync);
     }
 
-
-    /**
-     * Syncs the given role(s) with the user.
-     *
-     * @param        $role
-     * @param string $model
-     * @param int    $reference_id
-     *
-     * @return bool
-     */
-    public function syncRole($role, $model = '', $reference_id = 0)
-    {
-        $sync = [
-            $this->parseRoleId($role) => [
-                'model' => $model,
-                'reference_id' => $reference_id,
-            ]
-        ];
-
-        return $this->roles()->sync($sync);
-    }
-
     /**
      * Revokes all roles from the user.
      *
@@ -258,14 +252,17 @@ trait HasRoleImplementation
     */
 
     /**
-     * @param $slug
-     * @param $roles
+     * @param        $slug
+     * @param        $roles
+     * @param string $model
+     * @param int    $reference_id
+     *
      * @return bool
      */
-    protected function isWithAnd($slug, $roles)
+    protected function isWithAnd($slug, $roles, $model = '', $reference_id = 0)
     {
         foreach ($slug as $check) {
-            if ( ! in_array($check, $roles) ) {
+            if ( ! $this->checkRole($check, $roles, $model, $reference_id)) {
                 return false;
             }
         }
@@ -273,15 +270,19 @@ trait HasRoleImplementation
         return true;
     }
 
+
     /**
-     * @param $slug
-     * @param $roles
+     * @param        $slug
+     * @param        $roles
+     * @param string $model
+     * @param int    $reference_id
+     *
      * @return bool
      */
-    protected function isWithOr($slug, $roles)
+    protected function isWithOr($slug, $roles, $model = '', $reference_id = 0)
     {
         foreach ($slug as $check) {
-            if ( in_array($check, $roles) ) {
+            if ($this->checkRole($check, $roles, $model, $reference_id)) {
                 return true;
             }
         }
@@ -337,20 +338,74 @@ trait HasRoleImplementation
     {
         // Handle isRoleSlug() methods
         if ( starts_with($method, 'is') and $method !== 'is' and ! starts_with($method, 'isWith') ) {
-            $role = substr($method, 2);
+            $role         = substr($method, 2);
+            $model        = empty($arguments[0]) ? ''   : $arguments[0];
+            $reference_id = empty($arguments[1]) ? 0    : $arguments[1];
+            $operator     = empty($arguments[2]) ? null : $arguments[2];
 
-            return $this->hasRole($role);
+            return $this->hasRole($role, $model, $reference_id, $operator);
         }
 
         // Handle canDoSomething() methods
         if ( starts_with($method, 'can') and $method !== 'can' and ! starts_with($method, 'canWith') ) {
-            $permission = substr($method, 3);
-            $permission = snake_case($permission, '.');
+            $permission   = substr($method, 3);
+            $permission   = snake_case($permission, '.');
+            $model        = empty($arguments[0]) ? ''   : $arguments[0];
+            $reference_id = empty($arguments[1]) ? 0    : $arguments[1];
+            $operator     = empty($arguments[2]) ? null : $arguments[2];
 
-            return $this->can($permission);
+            return $this->can($permission, $model, $reference_id, $operator);
         }
 
         return parent::__call($method, $arguments);
+    }
+
+
+    /**
+     * Get sorted map from roles.
+     * @return array
+     */
+    private function getRolesMap($roles)
+    {
+        if (empty($roles)) {
+            return [];
+        }
+        $roles = $roles->map(function ($r) {
+            return [
+                'id'           => $r->id,
+                'slug'         => $r->slug,
+                'model'        => $r->pivot->model,
+                'reference_id' => $r->pivot->reference_id,
+            ];
+        });
+        $roles = $this->collectionAsArray($roles);
+
+        $map = [];
+        array_walk($roles, function ($role) use (&$map) {
+            $id   = $role['id'];
+            $slug = $role['slug'];
+            if (empty($map[$id])) {
+                $map[$id] = [];
+            }
+            $model_reference_keys = [
+                $role['model'],
+                // Do not count reference_id == 0 as model id.
+                $role['reference_id'] ? $role['reference_id'] : ''
+            ];
+            $model_reference_keys = array_filter($model_reference_keys, function ($key) {
+                return $key !== '';
+            });
+            $model_reference_key  = join(':', $model_reference_keys);
+
+            $map[$id][] = $model_reference_key ? "{$slug}:{$model_reference_key}" : "{$slug}";
+        });
+
+        foreach ($map as $role_id => $roles) {
+            sort($roles);
+            $map[$role_id] = $roles;
+        }
+
+        return $map;
     }
 }
 
