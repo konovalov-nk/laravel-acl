@@ -168,7 +168,7 @@ trait HasRoleImplementation
 
             $roleId = $this->parseRoleId($role);
 
-            if (count($this->roles()->where("roles.id",$roleId)->wherePivot('model',$model)->wherePivot('reference_id',$reference_id)->get()) == 0)
+            if (count($this->roles()->where("roles.id",$roleId)->wherePivot('model',$model)->wherePivot('reference_id',$reference_id)->get()) == 0) {
                 $this->roles()->attach($roleId, [
                     'model'        => $model,
                     'reference_id' => $reference_id
